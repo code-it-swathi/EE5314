@@ -1,0 +1,714 @@
+
+//-----------------------------------------------------------------------------
+// Hardware Target
+//-----------------------------------------------------------------------------
+
+// Target Platform: EK-TM4C123GXL Evaluation Board
+// Target uC:       TM4C123GH6PM
+// System Clock:    40 MHz
+
+// Hardware configuration:
+// Red Backlight LED:
+//   PB5 drives an NPN transistor that powers the red LED
+// Green Backlight LED:
+//   PE4 drives an NPN transistor that powers the green LED
+// Blue Backlight LED:
+//   PE5 drives an NPN transistor that powers the blue LED
+// Red LED:
+//   PF1 drives an NPN transistor that powers the red LED
+// Green LED:
+//   PF3 drives an NPN transistor that powers the green LED
+// Pushbutton:
+//   SW1 pulls pin PF4 low (internal pull-up is used)
+// UART Interface:
+//   U0TX (PA1) and U0RX (PA0) are connected to the 2nd controller
+//   The USB on the 2nd controller enumerates to an ICDI interface and a virtual COM port
+//   Configured to 115,200 baud, 8N1
+
+//-----------------------------------------------------------------------------
+// Device includes, defines, and assembler directives
+//-----------------------------------------------------------------------------
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include "tm4c123gh6pm.h"
+
+    uint8_t count=0,i=0,j=0,m, pos[81], posCounter=0, typeCounter=0, q=0, finalCounter=0,w=0,
+    initialCounter=0, argCounter1=0,argCounter2=0,w,x,y,arg1,arg2,d,e,f,g,h,i,j,k=0,l,o,p,r;
+    uint16_t dut1,dut2;
+    uint32_t tau,tau1,tau2,tau4;
+      char line[81],c, type[81], finalOutput[81], *str1= "set",*str2="voltage",*str3="reset",*v1[20],*v2[20],*v3[20],*v4[20],*str4="measurelr",*resistance[20],*capacitance[20],*inductance[20],
+              *str5="highsider",*str6="measurec",*str7="lowsider",*str8="integrate",*str9="on",*str10="off",*str11="resistance",*str12="capacitance",*str13="inductance",*str14="esr";
+      float voltage,one,two,tau3,rest;
+     // float tau1,tau2,tau3;
+    // bool res;
+    // bool cap;
+    // bool ind;
+
+   //function to convert string to lower case
+      int lower(int a)
+      {
+          if ((a >= 0x41) && (a <= 0x5A))
+              a |= 0x20;
+          return a;
+      }
+
+   //function to convert value from ASCII to integer
+      int conv(int b)
+      {
+          int p;
+          p=atoi(&finalOutput[pos[b]]);
+          return p;
+      }
+
+#define RED_LED         (*((volatile uint32_t *)(0x42000000 + (0x400253FC-0x40000000)*32 + 1*4)))
+#define MEASURE_LR      (*((volatile uint32_t *)(0x42000000 + (0x400243FC-0x40000000)*32 + 3*4)))
+#define HIGHSIDE_R      (*((volatile uint32_t *)(0x42000000 + (0x400243FC-0x40000000)*32 + 2*4)))
+#define MEASURE_C       (*((volatile uint32_t *)(0x42000000 + (0x400243FC-0x40000000)*32 + 1*4)))
+#define LOWSIDE_R       (*((volatile uint32_t *)(0x42000000 + (0x400073FC-0x40000000)*32 + 3*4)))
+#define INTEGRATE       (*((volatile uint32_t *)(0x42000000 + (0x400073FC-0x40000000)*32 + 2*4)))
+#define DUT1            (*((volatile uint32_t *)(0x42000000 + (0x400073FC-0x40000000)*32 + 1*4)))
+#define DUT2            (*((volatile uint32_t *)(0x42000000 + (0x400073FC-0x40000000)*32 + 0*4)))
+
+
+
+      void waitMicrosecond(uint32_t us)
+      {
+          __asm("WMS_LOOP0:   MOV  R1, #6");          // 1
+          __asm("WMS_LOOP1:   SUB  R1, #1");          // 6
+          __asm("             CBZ  R1, WMS_DONE1");   // 5+1*3
+          __asm("             NOP");                  // 5
+          __asm("             NOP");                  // 5
+          __asm("             B    WMS_LOOP1");       // 5*2
+          __asm("WMS_DONE1:   SUB  R0, #1");          // 1
+          __asm("             CBZ  R0, WMS_DONE0");   // 1
+          __asm("             NOP");                  // 1
+          __asm("             B    WMS_LOOP0");       // 1*2
+          __asm("WMS_DONE0:");                        // ---
+                                                      // 40 clocks/us
+      }
+
+//-----------------------------------------------------------------------------
+// Subroutines
+//-----------------------------------------------------------------------------
+
+// Blocking function that returns only when SW1 is pressed
+     void setCounterMode()
+      {
+          SYSCTL_RCGCWTIMER_R |= SYSCTL_RCGCWTIMER_R5;     // turn-on timer
+          WTIMER5_CTL_R &= ~TIMER_CTL_TAEN;                // turn-off counter before reconfiguring
+          WTIMER5_CFG_R = 4;                               // configure as 32-bit counter (A only)
+          WTIMER5_TAMR_R = TIMER_TAMR_TAMR_CAP | TIMER_TAMR_TACDIR; // configure for edge count mode, count up
+          WTIMER5_CTL_R = 0;                               //
+          WTIMER5_IMR_R = 0;                               // turn-off interrupts
+          WTIMER5_TAV_R = 0;                               // zero counter for first period
+          WTIMER5_CTL_R |= TIMER_CTL_TAEN;                 // turn-on counter
+          NVIC_EN3_R &= ~(1 << (INT_WTIMER5A-16-96));      // turn-off interrupt 120 (WTIMER5A)
+      }
+
+      void setTimerMode()
+      {
+          SYSCTL_RCGCWTIMER_R |= SYSCTL_RCGCWTIMER_R5;     // turn-on timer
+          WTIMER5_CTL_R &= ~TIMER_CTL_TAEN;                // turn-off counter before reconfiguring
+          WTIMER5_CFG_R = 4;                               // configure as 32-bit counter (A only)
+          WTIMER5_TAMR_R = TIMER_TAMR_TACMR | TIMER_TAMR_TAMR_CAP | TIMER_TAMR_TACDIR; // configure for edge time mode, count up
+          WTIMER5_CTL_R = TIMER_CTL_TAEVENT_POS;           // measure time from positive edge to positive edge
+          WTIMER5_IMR_R = TIMER_IMR_CAEIM;                 // turn-on interrupts
+          WTIMER5_TAV_R = 0;                               // zero counter for first period
+          WTIMER5_CTL_R |= TIMER_CTL_TAEN;                 // turn-on counter
+          NVIC_EN3_R |=(1 << (INT_WTIMER5A-16-96));         // turn-on interrupt 120 (WTIMER5A)
+      }
+
+// Initialize Hardware
+void initHw()
+{
+    // Configure HW to work with 16 MHz XTAL, PLL enabled, system clock of 40 MHz
+    SYSCTL_RCC_R = SYSCTL_RCC_XTAL_16MHZ | SYSCTL_RCC_OSCSRC_MAIN | SYSCTL_RCC_USESYSDIV | (4 << SYSCTL_RCC_SYSDIV_S);
+
+    // Set GPIO ports to use APB (not needed since default configuration -- for clarity)
+    SYSCTL_GPIOHBCTL_R = 0;
+
+    // Enable GPIO all port peripherals
+    SYSCTL_RCGC2_R = SYSCTL_RCGC2_GPIOA | SYSCTL_RCGC2_GPIOB | SYSCTL_RCGC2_GPIOE | SYSCTL_RCGC2_GPIOC | SYSCTL_RCGC2_GPIOD | SYSCTL_RCGC2_GPIOF;
+
+    // Configure LED and pushbutton pins
+    GPIO_PORTF_DIR_R = 0x02;  // bits 1 and 3 are outputs, other pins are inputs
+    GPIO_PORTF_DR2R_R = 0x02; // set drive strength to 2mA (not needed since default configuration -- for clarity)
+    GPIO_PORTF_DEN_R = 0x02;  // enable LEDs and pushbuttons
+    GPIO_PORTF_PUR_R = 0x10;  // enable internal pull-up for push button
+
+    //TEST PINS configured
+    GPIO_PORTD_DIR_R = 0x0C;// port pins PD2,PD3 as output
+    GPIO_PORTE_DIR_R = 0x0E;//port pins PE1,PE2,PE3 as output
+    GPIO_PORTD_DEN_R = 0x0C;//Enable PD2,PD3
+    GPIO_PORTE_DEN_R = 0x0E;//Enable digital PE1,PE2,PE3
+    GPIO_PORTE_DATA_R = 0x0E;
+    GPIO_PORTD_DATA_R = 0x0C;
+
+
+    // Configure UART0 pins
+    SYSCTL_RCGCUART_R |= SYSCTL_RCGCUART_R0;         // turn-on UART0, leave other uarts in same status
+    GPIO_PORTA_DEN_R |= 3;                           // default, added for clarity
+    GPIO_PORTA_AFSEL_R |= 3;                         // default, added for clarity
+    GPIO_PORTA_PCTL_R = GPIO_PCTL_PA1_U0TX | GPIO_PCTL_PA0_U0RX;
+
+    // Configure UART0 to 115200 baud, 8N1 format (must be 3 clocks from clock enable and config writes)
+    UART0_CTL_R = 0;                                 // turn-off UART0 to allow safe programming
+    UART0_CC_R = UART_CC_CS_SYSCLK;                  // use system clock (40 MHz)
+    UART0_IBRD_R = 21;                               // r = 40 MHz / (Nx115.2kHz), set floor(r)=21, where N=16
+    UART0_FBRD_R = 45;                               // round(fract(r)*64)=45
+    UART0_LCRH_R = UART_LCRH_WLEN_8 | UART_LCRH_FEN; // configure for 8N1 w/ 16-level FIFO
+    UART0_CTL_R = UART_CTL_TXE | UART_CTL_RXE | UART_CTL_UARTEN; // enable TX, RX, and module
+
+    // Configure AN0 as an analog input
+    SYSCTL_RCGCADC_R |= 3;                           // turn on ADC module 0 clocking
+    GPIO_PORTD_AFSEL_R |= 0x03;                      // select alternative functions for AN0 (PE3)
+    GPIO_PORTD_DEN_R &= ~0x03;                       // turn off digital operation on pin PE3
+    GPIO_PORTD_AMSEL_R |= 0x03;                      // turn on analog operation on pin PE3
+    ADC0_CC_R = ADC_CC_CS_SYSPLL;                    // select PLL as the time base (not needed, since default value)
+    ADC0_ACTSS_R &= ~ADC_ACTSS_ASEN3;                // disable sample sequencer 3 (SS3) for programming
+    ADC0_EMUX_R = ADC_EMUX_EM3_PROCESSOR;            // select SS3 bit in ADCPSSI as trigger
+    ADC0_SSMUX3_R = 0x06;                            // set first sample to AN0
+    ADC0_SSCTL3_R = ADC_SSCTL3_END0;                 // mark first sample as the end
+    ADC0_ACTSS_R |= ADC_ACTSS_ASEN3;                 // enable SS3 for operation
+
+    ADC1_CC_R = ADC_CC_CS_SYSPLL;                    // select PLL as the time base (not needed, since default value)
+    ADC1_ACTSS_R &= ~ADC_ACTSS_ASEN3;                // disable sample sequencer 3 (SS3) for programming
+    ADC1_EMUX_R = ADC_EMUX_EM3_PROCESSOR;            // select SS3 bit in ADCPSSI as trigger
+    ADC1_SSMUX3_R = 0x07;                            // set first sample to AN0
+    ADC1_SSCTL3_R = ADC_SSCTL3_END0;                 // mark first sample as the end
+    ADC1_ACTSS_R |= ADC_ACTSS_ASEN3;                 // enable SS3 for operation
+
+
+    //-------------------wtimer5 shorted with analog comparator output------------//
+    //configure PD6 pin which is wtimer5 pin (compare capture)
+    /*GPIO_PORTD_DEN_R |= 0x40;
+    GPIO_PORTD_AFSEL_R |=0x40;
+    GPIO_PORTD_PCTL_R &= ~GPIO_PCTL_PD6_M;
+    GPIO_PORTD_PCTL_R |= GPIO_PCTL_PD6_WT5CCP0;*/
+
+     /*MEASURE_LR=0;
+     MEASURE_C=0;
+     HIGHSIDE_R=0;
+     LOWSIDE_R=0;
+     INTEGRATE=0;*/
+
+
+    setTimerMode();
+
+        //configure analog comparator
+
+        //CO+ CO- PC6 and PC7
+        GPIO_PORTC_DEN_R &=~0x80;
+        GPIO_PORTC_AFSEL_R |=0x80;
+        GPIO_PORTC_AMSEL_R |=0x80;
+        GPIO_PORTC_DIR_R &=~0x80;
+
+     /*   //unlock PF0
+       GPIO_PORTF_LOCK_R=0x4C4F434B;//GPIO_LOCK_KEY;
+        GPIO_PORTF_CR_R=0x01;//GPIO_LOCK_LOCKED;
+
+        //CONFIGURE PF0(analog comparator output-->PF0)
+        GPIO_PORTF_AFSEL_R |=0x01;
+        GPIO_PORTF_DIR_R|=0x01;
+        GPIO_PORTF_DEN_R|=0x01;//0x01;
+        GPIO_PORTF_DR2R_R|=0x01;
+        GPIO_PORTF_PCTL_R= GPIO_PCTL_PF0_C0O;*/
+        SYSCTL_RCGCACMP_R|=SYSCTL_RCGCACMP_R0;//Analog Comparator Module 0 ENABLE
+
+        COMP_ACREFCTL_R|= COMP_ACREFCTL_EN|COMP_ACREFCTL_VREF_M;//enable reference stuff|setting the reference voltage
+        COMP_ACCTL0_R|= COMP_ACCTL0_ASRCP_REF|COMP_ACCTL0_ISEN_RISE;//Analog comparator control register//TOEN bit=1 and CINV bit = 1,COMP_ACCTL0_ASRCP_REF | COMP_ACCTL0_CINV;//0x402;
+ //////-------------------wtimer5 shorted with analog comparator output------------/
+        COMP_ACCTL0_R|= COMP_ACCTL0_CINV;
+        COMP_ACRIS_R|= COMP_ACRIS_IN0;
+        COMP_ACINTEN_R |= 0x01;
+        NVIC_EN0_R &=~(1<<INT_COMP0-16);
+
+}
+//interrupt service routine to get timer value and clear interrupt flag
+void COMPIsr()
+{
+
+         tau = WTIMER5_TAV_R;                //get the timer value i.e., tau
+         COMP_ACMIS_R=0x01;                  //clear interrupt flag
+
+}
+
+
+int16_t readAdc0Ss3()
+{
+    ADC0_PSSI_R |= ADC_PSSI_SS3;                     // set start bit
+    while (ADC0_ACTSS_R & ADC_ACTSS_BUSY);           // wait until SS3 is not busy
+    return ADC0_SSFIFO3_R;                           // get single result from the FIFO
+}
+int16_t readAdc1Ss3()
+{
+    ADC1_PSSI_R |= ADC_PSSI_SS3;                     // set start bit
+    while (ADC1_ACTSS_R & ADC_ACTSS_BUSY);           // wait until SS3 is not busy
+    return ADC1_SSFIFO3_R;                           // get single result from the FIFO
+}
+// Blocking function that writes a serial character when the UART buffer is not full
+void putcUart0(char c)
+{
+    while (UART0_FR_R & UART_FR_TXFF);
+    UART0_DR_R = c;
+}
+
+// Blocking function that writes a string when the UART buffer is not full
+void putsUart0(char* str)
+{
+    uint8_t i;
+    for (i = 0; i < strlen(str); i++)
+      putcUart0(str[i]);
+}
+
+// Blocking function that returns with serial data once the buffer is not empty
+char getcUart0()
+{
+    while (UART0_FR_R & UART_FR_RXFE);
+    return UART0_DR_R & 0xFF;
+}
+
+//-----------------------------------------------------------------------------
+// Main
+//-----------------------------------------------------------------------------
+
+int main(void)
+{
+    // Initialize hardware
+    initHw();
+
+          RED_LED = 1;
+          waitMicrosecond(500000);
+          RED_LED = 0;
+          waitMicrosecond(500000);
+
+      //step 2
+     while(1)
+              {
+
+
+          putsUart0("\r\nEnter the string: ");
+
+        //check the line of characters until end and until max count
+
+          for(count=0;count<81;count++)
+          {
+              start:                            c=getcUart0();                                                    //STEP 2
+                                                line[count]=c;
+                                                if(c==0x08)
+                                                {
+                                                    if(count>0)
+                                                    {
+                                                        count=count-1;
+                                                        goto start;
+
+                                                    }else goto start;
+                                                }
+                                                else if(c==0x0D)
+                                                    {
+                                                        line[count]=0x00;
+                                                        count=0;
+                                                        goto ready;
+                                                    }
+                                                else if (c>=0x20)
+                                                         {
+                                                            line[count]=lower(c);
+                                                            }count++;
+                                                            goto start;
+
+          }
+              line[count] = '\0';
+
+         //end of line
+         // putsUart0(line);
+
+          //step 3
+
+          //enter the loop until end of line
+         ready: if(j < strlen(line))
+         {
+          //for alphabet input
+            if(line[j] >= 0x61 && line[j]<= 0x7A)
+            {
+                pos[posCounter] = j;
+                type[typeCounter] = 'c';
+                i=j+1;
+                finalOutput[finalCounter++] = line[j];
+                while(line[i] >= 0x61 && line[i]<= 0x7A && line[i]!= '\0')
+                {
+                    finalOutput[finalCounter++] = line[i];             //print the characters
+                    i++;
+                }
+                j=i-1;
+                posCounter++;
+                typeCounter++;
+            }
+    //for number input
+            else if(line[j] >= 0x30 && line[j] <= 0x39)
+            {
+                       pos[posCounter] = j;
+                       type[typeCounter] = 'n';
+                       i=j+1;
+                       finalOutput[finalCounter++] = line[j];
+                       while(line[i] >= 0x30 && line[i]<= 0x39 && line[i]!= '\0')
+                       {
+                           finalOutput[finalCounter++] = line[i];              //print the numbers
+                           i++;
+                       }
+                       j=i-1;
+                       posCounter++;
+                       typeCounter++;
+            }
+             else
+                {
+                // Special Characters Handling
+                finalOutput[finalCounter++]='\0';                 //print space instead of delimiters
+                }
+            j++;
+            i=0;
+            if(line[j]!='\0')
+            {
+                goto ready;
+            }
+
+         }
+
+         // printf("Number of Arguments are %d\n", typeCounter);
+          //printf("final output is %s", finalOutput);
+         // printf("\nFinal Output is %d\n", strlen(finalOutput));
+         // for(q=0; q<posCounter;q++) {
+             // printf("positon is %d type is %c\n", pos[q], type[q]);}
+       /*   for(m=0;m<=typeCounter;m++)
+          {
+              putsUart0("\r\n");
+              putsUart0(&finalOutput[pos[m]]);
+
+          }*/
+
+          w=strcmp(str1,&finalOutput[pos[0]]);
+
+          x=strcmp(str2,&finalOutput[pos[0]]);
+
+          y=strcmp(str3,&finalOutput[pos[0]]);
+
+          d=strcmp(str4,&finalOutput[pos[0]]);
+
+          e=strcmp(str5,&finalOutput[pos[0]]);
+
+          f=strcmp(str6,&finalOutput[pos[0]]);
+
+          g=strcmp(str7,&finalOutput[pos[0]]);
+
+          h=strcmp(str8,&finalOutput[pos[0]]);
+
+          i=strcmp(str9,&finalOutput[pos[1]]);
+
+          j=strcmp(str10,&finalOutput[pos[1]]);
+
+          l=strcmp(str11,&finalOutput[pos[0]]);
+
+          o=strcmp(str12,&finalOutput[pos[0]]);
+
+          p=strcmp(str13,&finalOutput[pos[0]]);
+
+          r=strcmp(str14,&finalOutput[pos[0]]);
+
+          if(w==0)
+                    {
+                      //get the argument values and convert to integer
+                        if(typeCounter==3 && type[1]=='n' && type[2]=='n')
+                        {
+                            arg1= conv(1);
+                            arg2= conv(2);
+                        }
+                        else
+                        {
+                            putsUart0("\n\rinvalid input\n\r");
+                        }
+                    }
+          else if(d==0 && i==0)
+                        {
+                            MEASURE_LR=1;
+                            putsUart0("\r\nmeasure_lr\n\r");
+                        }
+            else if(d==0 && j==0)
+                        {
+                            MEASURE_LR=0;
+                            putsUart0("\r\nnot measure_lr\n\r");
+                        }
+            else if(e==0 && i==0)
+                        {
+                            HIGHSIDE_R=1;
+                            putsUart0("\r\nhighside_r\n\r");
+                        }
+            else if(e==0 && j==0)
+                        {
+                            HIGHSIDE_R=0;
+                            putsUart0("\r\nnot highside_r\n\r");
+                        }
+            else if(f==0 && i==0)
+                        {
+                            MEASURE_C=1;
+                            putsUart0("\r\nmeasure_c\n\r");
+                        }
+            else if(f==0 && j==0)
+                        {
+                            MEASURE_C=0;
+                            putsUart0("\r\nnot measure_c\n\r");
+                        }
+            else if(g==0 && i==0)
+                        {
+
+                putsUart0("\n\rlowside_r\n\r ");
+                LOWSIDE_R=1;
+
+                        }
+            else if(g==0 && j==0)
+                        {
+                            LOWSIDE_R=0;
+                            putsUart0("\r\nnot lowside_r\n\r");
+                        }
+            else if(h==0 && i==0)
+                        {
+                            putsUart0("\n\rintegrate ON\n\r");
+                            INTEGRATE=1;
+                        }
+            else if(h==0 && j==0)
+                        {
+                            INTEGRATE=0;
+                            putsUart0("\r\nintegrate off\n\r");
+                        }
+          //resistance calculation
+            else if(l==0)
+            {
+                                              LOWSIDE_R=1;
+                                              INTEGRATE=1;
+
+                                              MEASURE_C=0;
+                                              MEASURE_LR=0;
+                                              HIGHSIDE_R=0;
+
+                                              waitMicrosecond(10000000);//giving some time to charge the 1uF capacitor
+                                            // WTIMER5_CTL_R |= TIMER_CTL_TAEN;//turn -ON co
+
+
+                                              LOWSIDE_R=0;
+                                              MEASURE_LR=1;
+                                              WTIMER5_TAV_R=0;
+                                           //path from MEAS_LR to INEGRATE thru 1uF capacitor  T=RC C=1uF
+                                             // COMP_ACINTEN_R=0x01;
+                                            //   WTIMER5_TAV_R=0;
+
+                                              //COMP_ACINTEN_R |=COMP_ACINTEN_IN0;
+                                              NVIC_EN0_R |= (1 << (INT_COMP0-16));
+                                               waitMicrosecond(10000000);
+                                               NVIC_EN0_R &=~(1 << (INT_COMP0-16));
+                                           // COMP_ACINTEN_R &= ~COMP_ACINTEN_IN0;
+                                               tau1=tau/40;
+                                              if(tau1>=0 && tau1<=125)
+                                              {
+                                                  //tau2=((0.8899*tau1)-9.868);
+                                                 tau2=((0.4899*tau1)-8.868);
+                                              }
+                                              else if(tau1>=126 && tau1<=1300)
+                                              {
+                                                  //tau2=((0.7958*tau1)+18.362);
+                                                  tau2=((0.7073*tau1)+6.8563);//0.8073
+                                              }
+                                              else if(tau1>=1301&& tau1<=12300)
+                                              {
+                                                  //tau2=((0.7146*tau1)+3.1435);
+                                                  tau2=((0.8048*tau1)+0.9381);//0.8148
+                                              }
+                                              else if(tau1>=12301 && tau1<=123700)
+                                              {
+                                                 // tau2=((0.8097*tau1)+490.93);
+                                                  tau2=((0.8121*tau1)+272.57);
+                                              }
+                                              else if(tau1>=123701 && tau1<=1100000)
+                                              {
+                                                  //tau2=((1.0734*tau1)-47778);
+                                                  tau2=((1.0608*tau1)-37973);
+                                              }
+                                              //tau2=((tau1*1.1048)-7321.3);
+                                              // tau2= tau/40;
+
+                                                                             sprintf(resistance,"%lu",tau2);
+
+                                                                             putsUart0("\r");
+                                                                             putsUart0("\nResistance=\r\n");
+                                                                             putsUart0(resistance);
+                                                                             putsUart0("ohms");
+                                                                             waitMicrosecond(500000);
+
+            }
+          //capacitance calculation
+            else if(o==0)
+            {
+
+                                                            MEASURE_C=1;
+                                                            LOWSIDE_R=1;
+                                                            HIGHSIDE_R=0;
+                                                            INTEGRATE=0;
+                                                            MEASURE_LR=0;
+                                                            waitMicrosecond(20000000);//giving some time to charge the 1uF capacitor
+                                                          //;//turn -ON co
+                                                           // WTIMER5_CTL_R |= TIMER_CTL_TAEN;
+                                                           // WTIMER5_TAV_R=0;
+                                                            //WTIMER5_CTL_R |= TIMER_CTL_TAEN;
+                                                            LOWSIDE_R=0;
+                                                            HIGHSIDE_R=1;//path from MEAS_LR to INEGRATE thru 1uF capacitor  T=RC C=1uF
+                                                        //
+                                                            WTIMER5_TAV_R=0;
+                                                            WTIMER5_CTL_R |= TIMER_CTL_TAEN;
+                                                            //COMP_ACINTEN_R=0x01;
+                                                           // COMP_ACINTEN_R |=COMP_ACINTEN_IN0;
+                                                        NVIC_EN0_R |=(1<<(INT_COMP0-16));
+                                                             waitMicrosecond(20000000);
+                                                        NVIC_EN0_R &=~(1<<(INT_COMP0-16));
+                                                         // COMP_ACINTEN_R &= ~COMP_ACINTEN_IN0;
+                                                        tau1=tau/40;
+                                                        if(tau>=13500 && tau<=7050000)
+                                                        {
+                                                            tau3=((0.000007*tau1)+0.0508);
+                                                        }
+                                                        else if(tau>=150 && tau>=3200)
+                                                        {
+                                                            tau3=((0.000007*tau1)+0.00005);
+                                                        }
+                                                       // tau3=((0.000007*tau1)+0.0508);
+                                                       // tau3=((0.000007*tau1)+0.025);
+                                                                                           sprintf(capacitance,"%f",tau3);
+
+                                                                                           putsUart0("\r");
+                                                                                           putsUart0("\ncapacitance=\r\n");
+                                                                                           putsUart0(capacitance);
+                                                                                           putsUart0("microfarad");
+                                                                                           waitMicrosecond(500000);
+
+            }
+          //inductance calculation
+            else if(p==0)
+            {
+
+                                                                          //INTEGRATE=1;
+                                                                           LOWSIDE_R=1;
+                                                                           MEASURE_LR=0;
+                                                                           HIGHSIDE_R=0;
+                                                                           INTEGRATE=0;
+                                                                           MEASURE_C=0;
+
+                                                                           waitMicrosecond(10000000);
+
+                                                                           MEASURE_LR=1;
+                                                                           LOWSIDE_R=1;
+                                                                           HIGHSIDE_R=0;
+                                                                           INTEGRATE=0;
+                                                                           MEASURE_C=0;
+
+                                                                          //giving some time to charge the 1uF capacitor
+                                                                         //;//turn -ON co
+                                                                          // WTIMER5_CTL_R |= TIMER_CTL_TAEN;
+                                                                          // WTIMER5_TAV_R=0;
+                                                                           //WTIMER5_CTL_R |= TIMER_CTL_TAEN;
+                                                                          // LOWSIDE_R=0;
+                                                                          // HIGHSIDE_R=1;//path from MEAS_LR to INEGRATE thru 1uF capacitor  T=RC C=1uF
+                                                                       //
+                                                                           WTIMER5_TAV_R=0;
+                                                                           WTIMER5_CTL_R |= TIMER_CTL_TAEN;
+                                                                           //COMP_ACINTEN_R=0x01;
+                                                                          // COMP_ACINTEN_R |=COMP_ACINTEN_IN0;
+                                                                       NVIC_EN0_R |=(1<<(INT_COMP0-16));
+                                                                            waitMicrosecond(10000000);
+                                                                       NVIC_EN0_R &=~(1<<(INT_COMP0-16));
+                                                                        // COMP_ACINTEN_R &= ~COMP_ACINTEN_IN0;
+                                                                                 tau1=tau;
+                                                                                tau4=((0.5672*tau1)+14.4);
+                                                                      //tau4=((0.000007*tau1)+0.0508);
+                                                                                                          sprintf(inductance,"%lu",tau4);
+
+                                                                                                          putsUart0("\r");
+                                                                                                          putsUart0("\ninductance=\r\n");
+                                                                                                          putsUart0(inductance);
+                                                                                                          putsUart0("mhenry");
+                                                                                                          waitMicrosecond(500000);
+
+
+            }
+          //ESR calculation
+            else if(r==0)
+            {
+                                        LOWSIDE_R = 1;
+                                        MEASURE_C = 0;
+                                        HIGHSIDE_R = 0;
+                                        MEASURE_LR = 1;
+                                        waitMicrosecond(2000000);
+                                        dut1=    readAdc0Ss3();
+                                        dut2=    readAdc1Ss3();
+                                        voltage= ((dut1-dut2)*3.3)/4096;
+                                        one= (dut1*3.3)/4096;
+                                        two= (dut2*3.3)/4096;
+                                        rest=(((one-two)*33)/two);
+                                        sprintf(v4,"\n\r%f",rest);
+                                        putsUart0("\r\nresistance is");
+                                        putsUart0(v4);
+
+            }
+
+          //voltage calculation
+          //step 6
+
+         else if(x==0)
+          {
+              dut1=    readAdc0Ss3();
+              dut2=    readAdc1Ss3();
+              voltage= ((dut1-dut2)*3.3)/4096;
+              one= (dut1*3.3)/4096;
+              two= (dut2*3.3)/4096;
+              sprintf(v1,"\n\r%f",one);
+              putsUart0(v1);
+              sprintf(v2,"\n\r%f",two);
+              putsUart0(v2);
+              sprintf(v3,"\n\r%f",voltage);
+              putsUart0(v3);
+
+          }
+          //reset
+          //step 7
+         else if(y==0)
+          {
+              NVIC_APINT_R=0X05FA0004;
+             /* RED_LED = 1;
+              waitMicrosecond(500000);
+              RED_LED = 0;
+              waitMicrosecond(500000);*/
+
+          }
+
+
+                       else
+                               {
+                                   putsUart0("\n\rinvalid command");
+                               }
+               //clear all variables for next round
+
+              for(k=0;k<20;k++)
+              {
+                  line[k]='\0';
+                finalOutput[k]='\0';
+                finalCounter=0;
+                  j=0;i=0;pos[k]='\0';
+                  type[k]='\0';
+                  typeCounter=0;
+                  posCounter=0;
+              }
+
+
+}
+}
+
+
